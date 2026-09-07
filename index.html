@@ -68,6 +68,37 @@
   .legend { display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; margin-top: 10px; font-size: 13px; color: #aab6d8; }
   .legend span { display: flex; align-items: center; gap: 5px; }
   .chip { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }
+
+  /* ===== 移动端适配 ===== */
+  #gameWrap { touch-action: none; }
+  canvas { touch-action: none; }
+  @media (max-width: 860px) {
+    h1 { font-size: 20px; margin-bottom: 8px; letter-spacing: 3px; }
+    canvas { max-width: 100%; height: auto; }
+  }
+  .mobile-btn {
+    position: absolute;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.5);
+    background: rgba(20, 30, 60, 0.55);
+    color: #fff;
+    font-size: 22px;
+    z-index: 5;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    cursor: pointer;
+  }
+  .mobile-btn:active { background: rgba(79, 195, 247, 0.4); }
+  #pauseBtn { top: 8px; right: 8px; }
+  #bombBtn  { bottom: 10px; right: 10px; }
+  body.is-touch .mobile-btn { display: flex; }
+
 </style>
 </head>
 <body>
@@ -102,6 +133,10 @@
     <p id="finalWave">波次：1</p>
     <button class="btn" id="restartBtn">再 来 一 局</button>
   </div>
+
+  <!-- 移动端悬浮按钮 -->
+  <button class="mobile-btn" id="pauseBtn" aria-label="暂停">⏸</button>
+  <button class="mobile-btn" id="bombBtn" aria-label="炸弹">💣</button>
 </div>
 
 <script>
@@ -123,6 +158,8 @@ let state = STATE.MENU;
 let player, bullets, enemyBullets, enemies, particles, powerups, stars;
 let score, wave, lives, spawnTimer, waveTimer, bossActive, shake, autoFire;
 let keys = {};
+// 触摸控制状态（手机）
+let touch = { active: false, x: 0, y: 0 };
 
 // ============ 音效（Web Audio API 合成，无需外部文件） ============
 let audioCtx = null;
@@ -210,6 +247,67 @@ document.getElementById('startBtn').addEventListener('click', startGame);
 document.getElementById('resumeBtn').addEventListener('click', resumeGame);
 document.getElementById('restartBtn').addEventListener('click', startGame);
 canvas.addEventListener('click', () => { if (state === STATE.MENU) startGame(); });
+
+// ============ 触屏设备检测 ============
+const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+if (isTouch) {
+  document.body.classList.add('is-touch');
+  // 更新开始界面的操作说明
+  document.querySelector('.legend').innerHTML =
+    '<span>👆 拖动屏幕移动飞船</span>' +
+    '<span>🤖 自动射击</span>' +
+    '<span>💣 右下按钮 放炸弹</span>' +
+    '<span>⏸ 右上按钮 暂停</span>';
+}
+
+// ============ 移动端按钮 ============
+const pauseBtn = document.getElementById('pauseBtn');
+const bombBtn = document.getElementById('bombBtn');
+function btnTouch(fn) {
+  return (e) => { e.preventDefault(); e.stopPropagation(); fn(); };
+}
+pauseBtn.addEventListener('touchstart', btnTouch(() => {
+  if (state === STATE.PLAYING) pauseGame();
+  else if (state === STATE.PAUSED) resumeGame();
+}));
+bombBtn.addEventListener('touchstart', btnTouch(() => { if (state === STATE.PLAYING) useBomb(); }));
+pauseBtn.addEventListener('click', () => {
+  if (state === STATE.PLAYING) pauseGame();
+  else if (state === STATE.PAUSED) resumeGame();
+});
+bombBtn.addEventListener('click', () => { if (state === STATE.PLAYING) useBomb(); });
+
+// ============ 画布触摸控制（拖动移动飞船） ============
+function getCanvasPos(t) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (t.clientX - rect.left) * (W / rect.width),
+    y: (t.clientY - rect.top) * (H / rect.height),
+  };
+}
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  if (state === STATE.MENU) { startGame(); return; }
+  if (state !== STATE.PLAYING) return;
+  for (const t of e.changedTouches) {
+    const p = getCanvasPos(t);
+    touch.active = true;
+    touch.x = p.x; touch.y = p.y;
+  }
+}, { passive: false });
+canvas.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  if (state !== STATE.PLAYING) return;
+  for (const t of e.changedTouches) {
+    const p = getCanvasPos(t);
+    touch.x = p.x; touch.y = p.y;
+  }
+}, { passive: false });
+const endTouch = (e) => {
+  if (e.touches.length === 0) touch.active = false;
+};
+canvas.addEventListener('touchend', endTouch);
+canvas.addEventListener('touchcancel', endTouch);
 
 function startGame() {
   initAudio();
@@ -361,6 +459,11 @@ function update(dt) {
   if (keys['ArrowRight'] || keys['KeyD']) player.x += player.speed * 60 * dt;
   if (keys['ArrowUp'] || keys['KeyW']) player.y -= player.speed * 60 * dt * 0.7;
   if (keys['ArrowDown'] || keys['KeyS']) player.y += player.speed * 60 * dt * 0.7;
+  // 触屏拖动：飞船跟随手指（限制在可操作区域）
+  if (touch.active) {
+    player.x = touch.x;
+    player.y = Math.max(H * 0.35, Math.min(H - player.r, touch.y));
+  }
   player.x = Math.max(player.r, Math.min(W - player.r, player.x));
   player.y = Math.max(player.r + 30, Math.min(H - player.r, player.y));
 
