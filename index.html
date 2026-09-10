@@ -99,6 +99,45 @@
   #bombBtn  { bottom: 10px; right: 10px; }
   body.is-touch .mobile-btn { display: flex; }
 
+  /* ===== 通关界面 ===== */
+  #victoryScreen { background: rgba(5, 8, 20, 0.35); pointer-events: none; }
+  #victoryScreen .btn { pointer-events: auto; }
+  .victory-title {
+    font-size: 42px;
+    letter-spacing: 8px;
+    margin-bottom: 18px;
+    background: linear-gradient(90deg, #ffd740, #ff5252, #40c4ff, #ffd740);
+    background-size: 300% 100%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmer 3s linear infinite;
+    text-shadow: none;
+  }
+  .victory-text {
+    font-size: 32px;
+    line-height: 2.1;
+    margin: 6px auto;
+    max-width: 640px;
+    padding: 0 12px;
+  }
+  .victory-text span {
+    display: inline-block;
+    opacity: 0;
+    transform: scale(0);
+    animation: popIn 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  }
+  .victory-sign {
+    color: #a5d8ff;
+    font-size: 17px;
+    letter-spacing: 3px;
+    margin-top: 14px;
+  }
+  @keyframes popIn {
+    0%   { opacity: 0; transform: scale(0) translateY(26px) rotate(-10deg); }
+    70%  { transform: scale(1.18) rotate(3deg); }
+    100% { opacity: 1; transform: scale(1) rotate(0); }
+  }
+
 </style>
 </head>
 <body>
@@ -134,6 +173,14 @@
     <button class="btn" id="restartBtn">再 来 一 局</button>
   </div>
 
+  <!-- 通关界面（全关通关，烟花+大字） -->
+  <div class="overlay hidden" id="victoryScreen">
+    <h2 class="victory-title">🎆 全 关 通 关 🎆</h2>
+    <div class="victory-text" id="victoryText"></div>
+    <p class="victory-sign">—— 来自 711 智慧树的问候 ——</p>
+    <button class="btn" id="victoryRestartBtn">再 来 一 局</button>
+  </div>
+
   <!-- 移动端悬浮按钮 -->
   <button class="mobile-btn" id="pauseBtn" aria-label="暂停">⏸</button>
   <button class="mobile-btn" id="bombBtn" aria-label="炸弹">💣</button>
@@ -160,6 +207,7 @@ let missiles = [], lasers = [];
 let score, wave, lives, spawnTimer, waveTimer, bossActive, shake, autoFire;
 let airdropTimer = 6000;
 let chapter = 1, chapterBanner = 0, chapterTitle = '';
+let victory = false, fireworkTimer = 0;
 // 关卡主题（每 5 波一关，打完 Boss 进入下一关）
 const CHAPTER_NAMES = ['星云边缘', '陨石地带', '暗影深渊', '极光之境', '银河核心'];
 const CHAPTER_COLORS = ['#0d1226', '#190b2e', '#0b261d', '#26130b', '#101c38'];
@@ -238,6 +286,8 @@ function resetGame() {
   chapter = 1;
   chapterBanner = 0;
   chapterTitle = '';
+  victory = false;
+  fireworkTimer = 0;
   initStars();
 }
 
@@ -260,6 +310,7 @@ document.addEventListener('keyup', (e) => { keys[e.code] = false; });
 document.getElementById('startBtn').addEventListener('click', startGame);
 document.getElementById('resumeBtn').addEventListener('click', resumeGame);
 document.getElementById('restartBtn').addEventListener('click', startGame);
+document.getElementById('victoryRestartBtn').addEventListener('click', startGame);
 canvas.addEventListener('click', () => { if (state === STATE.MENU) startGame(); });
 
 // ============ 触屏设备检测 ============
@@ -330,6 +381,7 @@ function startGame() {
   startScreen.classList.add('hidden');
   gameOverScreen.classList.add('hidden');
   pauseScreen.classList.add('hidden');
+  document.getElementById('victoryScreen').classList.add('hidden');
 }
 function pauseGame() {
   state = STATE.PAUSED;
@@ -380,6 +432,24 @@ function spawnParticle(x, y, color, n = 6, life = 0.5) {
       r: rand(1, 3), color,
     });
   }
+}
+
+// ============ 烟花（通关特效） ============
+const FIREWORK_COLORS = ['#ff5252', '#ffd740', '#40c4ff', '#69f0ae', '#e040fb', '#ff8a65', '#ffea00', '#18ffff'];
+function spawnFirework(x, y) {
+  const n = 42;
+  for (let i = 0; i < n; i++) {
+    const ang = (i / n) * Math.PI * 2 + rand(-0.15, 0.15);
+    const spd = rand(1.5, 5.5);
+    particles.push({
+      x, y, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd,
+      life: rand(0.7, 1.5), maxLife: 1.5, r: rand(2, 4),
+      color: FIREWORK_COLORS[randInt(0, FIREWORK_COLORS.length - 1)],
+      firework: true,
+    });
+  }
+  // 爆心闪光
+  particles.push({ x, y, vx: 0, vy: 0, life: 0.15, maxLife: 0.15, r: 12, color: '#ffffff', firework: true });
 }
 
 // ============ 射击（火力等级越高，弹体越大、伤害越高、弹数越多） ============
@@ -475,12 +545,38 @@ function bossKilled(ei) {
   enemies.splice(ei, 1);
   wave++;
   chapter = Math.ceil(wave / 5);
+  // 打完最终 Boss → 全关通关，放烟花！
+  if (chapter > CHAPTER_NAMES.length) { triggerVictory(); return; }
   chapterBanner = 2.2;
   chapterTitle = (CHAPTER_NAMES[(chapter - 1) % CHAPTER_NAMES.length] || '星海深处');
   sfx.boom();
   shake = 20;
   spawnPowerup(e.x - 40, e.y);
   spawnPowerup(e.x + 40, e.y);
+}
+
+// ============ 全关通关 ============
+function triggerVictory() {
+  victory = true;
+  bossActive = false;
+  enemies.length = 0;
+  enemyBullets.length = 0;
+  bullets.length = 0;
+  missiles.length = 0;
+  lasers.length = 0;
+  powerups.length = 0;
+  // 逐字蹦出祝福语
+  const text = '智慧树上智慧果，智慧树下你和我！来自711智慧树的问候！';
+  const colors = ['#ffd740', '#ff5252', '#40c4ff', '#69f0ae', '#e040fb', '#ff8a65'];
+  let html = '', i = 0;
+  for (const ch of text) {
+    html += '<span style="color:' + colors[i % colors.length] + ';animation-delay:' + (i * 0.09).toFixed(2) + 's">' + ch + '</span>';
+    i++;
+  }
+  document.getElementById('victoryText').innerHTML = html;
+  document.getElementById('victoryScreen').classList.remove('hidden');
+  fireworkTimer = 0.3;
+  sfx.boom();
 }
 
 // ============ Boss ============
@@ -499,7 +595,7 @@ function spawnBoss() {
 
 // ============ 波次逻辑 ============
 function updateWave(dt) {
-  if (bossActive) return;
+  if (victory || bossActive) return;
   if (enemies.length === 0) {
     waveTimer += dt * 1000;
     if (waveTimer > 1800) {
@@ -779,12 +875,22 @@ function update(dt) {
   for (const p of particles) {
     p.x += p.vx * 60 * dt;
     p.y += p.vy * 60 * dt;
+    if (p.firework) p.vy += 110 * dt; // 烟花受重力下落
     p.life -= dt;
   }
   particles = particles.filter(p => p.life > 0);
 
   if (shake > 0) shake -= 60 * dt;
   if (chapterBanner > 0) chapterBanner -= dt;
+
+  // ===== 通关烟花 =====
+  if (victory) {
+    fireworkTimer -= dt;
+    if (fireworkTimer <= 0) {
+      fireworkTimer = rand(0.25, 0.5);
+      spawnFirework(rand(70, W - 70), rand(60, H * 0.65));
+    }
+  }
 
   // 波次更新（非 Boss 时）
   updateWave(dt);
@@ -1177,7 +1283,17 @@ function draw() {
   for (const p of particles) {
     ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
     ctx.fillStyle = p.color;
-    ctx.fillRect(p.x - p.r / 2, p.y - p.r / 2, p.r, p.r);
+    if (p.firework) {
+      // 烟花：圆形发光粒子
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.shadowColor = p.color;
+      ctx.shadowBlur = 8;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    } else {
+      ctx.fillRect(p.x - p.r / 2, p.y - p.r / 2, p.r, p.r);
+    }
   }
   ctx.globalAlpha = 1;
 
