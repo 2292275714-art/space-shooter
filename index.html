@@ -156,7 +156,14 @@ const STATE = { MENU: 0, PLAYING: 1, PAUSED: 2, OVER: 3 };
 let state = STATE.MENU;
 
 let player, bullets, enemyBullets, enemies, particles, powerups, stars;
+let missiles = [], lasers = [];
 let score, wave, lives, spawnTimer, waveTimer, bossActive, shake, autoFire;
+let airdropTimer = 6000;
+let chapter = 1, chapterBanner = 0, chapterTitle = '';
+// 关卡主题（每 5 波一关，打完 Boss 进入下一关）
+const CHAPTER_NAMES = ['星云边缘', '陨石地带', '暗影深渊', '极光之境', '银河核心'];
+const CHAPTER_COLORS = ['#0d1226', '#190b2e', '#0b261d', '#26130b', '#101c38'];
+const BOSS_COLORS = ['#d500f9', '#ff1744', '#00e676', '#ff9100', '#3d5afe'];
 let keys = {};
 // 触摸控制状态（手机）
 let touch = { active: false, x: 0, y: 0 };
@@ -210,12 +217,15 @@ function resetGame() {
     x: W / 2, y: H - 70, r: 16, speed: 6.5,
     lives: 3, fireRate: 200, fireCd: 0, triple: 0, tripleT: 0,
     shield: 0, invuln: 0, bomb: 1,
+    power: 1, missile: 0, missileT: 0, laser: 0, laserT: 0,
   };
   bullets = [];
   enemyBullets = [];
   enemies = [];
   particles = [];
   powerups = [];
+  missiles = [];
+  lasers = [];
   score = 0;
   wave = 1;
   lives = 3;
@@ -224,6 +234,10 @@ function resetGame() {
   bossActive = false;
   shake = 0;
   autoFire = true;
+  airdropTimer = rand(4000, 7000);
+  chapter = 1;
+  chapterBanner = 0;
+  chapterTitle = '';
   initStars();
 }
 
@@ -328,7 +342,7 @@ function resumeGame() {
 function gameOver() {
   state = STATE.OVER;
   document.getElementById('finalScore').textContent = '得分：' + score;
-  document.getElementById('finalWave').textContent = '波次：' + wave;
+  document.getElementById('finalWave').textContent = '关卡：第 ' + chapter + ' 关 · 第 ' + wave + ' 波';
   gameOverScreen.classList.remove('hidden');
 }
 
@@ -368,23 +382,49 @@ function spawnParticle(x, y, color, n = 6, life = 0.5) {
   }
 }
 
-// ============ 射击 ============
+// ============ 射击（火力等级越高，弹体越大、伤害越高、弹数越多） ============
 function playerShoot() {
+  const pwr = player.power;
+  const dmg = pwr;
+  const r = 4 + pwr * 0.9;
+  const color = pwr >= 5 ? '#ffd54f' : (pwr >= 3 ? '#ff9800' : '#4fc3f7');
+
+  // 主炮
+  bullets.push({ x: player.x, y: player.y - 14, vx: 0, vy: -10, r, dmg, color });
+  // 火力 Lv.2+：左右副炮
+  if (pwr >= 2) {
+    bullets.push({ x: player.x - 12, y: player.y - 6, vx: -1.5, vy: -10, r: r - 1, dmg, color });
+    bullets.push({ x: player.x + 12, y: player.y - 6, vx: 1.5, vy: -10, r: r - 1, dmg, color });
+  }
+  // 火力 Lv.4+：侧翼散射
+  if (pwr >= 4) {
+    bullets.push({ x: player.x - 10, y: player.y - 4, vx: -4.5, vy: -9, r: r - 2, dmg, color });
+    bullets.push({ x: player.x + 10, y: player.y - 4, vx: 4.5, vy: -9, r: r - 2, dmg, color });
+  }
+  // 三向射击道具
   if (player.triple > 0) {
-    bullets.push({ x: player.x, y: player.y - 14, vx: 0, vy: -10, r: 4, color: '#4fc3f7' });
-    bullets.push({ x: player.x - 10, y: player.y - 8, vx: -3, vy: -9.5, r: 4, color: '#4fc3f7' });
-    bullets.push({ x: player.x + 10, y: player.y - 8, vx: 3, vy: -9.5, r: 4, color: '#4fc3f7' });
-  } else {
-    bullets.push({ x: player.x, y: player.y - 14, vx: 0, vy: -10, r: 4, color: '#4fc3f7' });
+    bullets.push({ x: player.x - 16, y: player.y - 4, vx: -4, vy: -9.5, r: r - 1, dmg, color });
+    bullets.push({ x: player.x + 16, y: player.y - 4, vx: 4, vy: -9.5, r: r - 1, dmg, color });
+  }
+  // 追踪导弹
+  if (player.missile > 0) {
+    missiles.push({ x: player.x - 8, y: player.y - 4, vx: 0, vy: -7, r: 6, dmg: 3 + pwr });
+  }
+  // 激光（贯穿光束）
+  if (player.laser > 0) {
+    lasers.push({ x: player.x, y: player.y - 14, r: 5 + pwr, dmg: 6 + pwr * 2, length: H });
   }
   sfx.shoot();
 }
 
 // ============ 敌人生成 ============
 const ENEMY_TYPES = {
-  basic:  { r: 16, hp: 1, score: 100, speed: rand(1.2, 2), color: '#e53935', fire: false, drop: 0.10 },
-  speedy: { r: 12, hp: 1, score: 150, speed: rand(2.5, 3.8), color: '#ff9800', fire: false, drop: 0.12 },
-  tank:   { r: 22, hp: 4, score: 300, speed: 0.9, color: '#8e24aa', fire: true, drop: 0.30 },
+  basic:    { r: 16, hp: 1, score: 100, speed: rand(1.2, 2),   color: '#e53935', fire: false, drop: 0.10 },
+  speedy:   { r: 12, hp: 1, score: 150, speed: rand(2.5, 3.8), color: '#ff9800', fire: false, drop: 0.12 },
+  tank:     { r: 22, hp: 4, score: 300, speed: 0.9,           color: '#8e24aa', fire: true,  drop: 0.30 },
+  splitter: { r: 15, hp: 2, score: 200, speed: rand(1.1, 1.7), color: '#26c6da', fire: false, drop: 0.18, minChapter: 2 },
+  kamikaze: { r: 11, hp: 1, score: 180, speed: rand(3.0, 4.0), color: '#ff6d00', fire: false, drop: 0.10, minChapter: 2 },
+  sniper:   { r: 13, hp: 2, score: 250, speed: 0.6,           color: '#ff5252', fire: true,  drop: 0.20, minChapter: 3, hover: true },
 };
 
 function spawnEnemy(type) {
@@ -395,16 +435,62 @@ function spawnEnemy(type) {
     r: t.r, hp: t.hp, maxHp: t.hp, score: t.score, speed: t.speed,
     color: t.color, fire: t.fire, fireCd: rand(1000, 2500), isBoss: false,
     sway: rand(0, Math.PI * 2), swaySpeed: rand(1.5, 3),
+    hover: !!t.hover, hoverY: rand(40, H * 0.3),
   });
+}
+
+// 分裂者死亡时分裂成两个小敌机
+function splitEnemy(e) {
+  for (let i = 0; i < 2; i++) {
+    enemies.push({
+      type: 'mini', x: e.x + (i === 0 ? -9 : 9), y: e.y,
+      vx: i === 0 ? -0.8 : 0.8,
+      r: 7, hp: 1, maxHp: 1, score: 50, speed: rand(1.8, 2.4),
+      color: '#80deea', fire: false, fireCd: 9999, isBoss: false,
+      sway: rand(0, Math.PI * 2), swaySpeed: rand(2, 3.5),
+      hover: false, hoverY: 0,
+    });
+  }
+}
+
+// 敌人死亡统一处理（计分/爆炸/掉落/分裂）
+function killEnemy(ei) {
+  const e = enemies[ei];
+  score += e.score;
+  spawnExplosion(e.x, e.y, e.color);
+  if (Math.random() < e.drop) spawnPowerup(e.x, e.y);
+  if (e.type === 'splitter') splitEnemy(e);
+  enemies.splice(ei, 1);
+  sfx.hit();
+}
+
+// Boss 死亡：进入下一关
+function bossKilled(ei) {
+  const e = enemies[ei];
+  score += e.score;
+  bossActive = false;
+  spawnExplosion(e.x, e.y, '#d500f9');
+  spawnExplosion(e.x, e.y, '#ff4081');
+  spawnExplosion(e.x, e.y, '#ffd54f');
+  enemies.splice(ei, 1);
+  wave++;
+  chapter = Math.ceil(wave / 5);
+  chapterBanner = 2.2;
+  chapterTitle = (CHAPTER_NAMES[(chapter - 1) % CHAPTER_NAMES.length] || '星海深处');
+  sfx.boom();
+  shake = 20;
+  spawnPowerup(e.x - 40, e.y);
+  spawnPowerup(e.x + 40, e.y);
 }
 
 // ============ Boss ============
 function spawnBoss() {
   bossActive = true;
+  const bc = BOSS_COLORS[(chapter - 1) % BOSS_COLORS.length];
   enemies.push({
     type: 'boss', x: W / 2, y: -60, vx: 0,
-    r: 46, hp: 80 + wave * 15, maxHp: 80 + wave * 15,
-    score: 3000, speed: 1.5, color: '#d500f9', fire: true,
+    r: 46, hp: 80 + chapter * 40, maxHp: 80 + chapter * 40,
+    score: 3000 + chapter * 500, speed: 1.5, color: bc, fire: true,
     fireCd: 500, isBoss: true, phase: 0, phaseT: 0,
     sway: 0, swaySpeed: 1,
   });
@@ -423,10 +509,12 @@ function updateWave(dt) {
       } else {
         wave++;
         const count = 4 + Math.floor(wave * 1.2);
+        // 敌人池随章节解锁新类型
+        const pool = ['basic', 'speedy', 'tank'];
+        if (chapter >= 2) pool.push('splitter', 'kamikaze');
+        if (chapter >= 3) pool.push('sniper');
         for (let i = 0; i < count; i++) {
-          const roll = Math.random();
-          const type = roll < 0.55 ? 'basic' : (roll < 0.85 ? 'speedy' : 'tank');
-          spawnEnemy(type);
+          spawnEnemy(pool[randInt(0, pool.length - 1)]);
         }
       }
     }
@@ -435,14 +523,24 @@ function updateWave(dt) {
 
 // ============ 道具 ============
 const POWERUP_TYPES = [
-  { id: 'triple',  color: '#4fc3f7', label: '三向射击', w: 0.30 },
-  { id: 'shield',  color: '#66bb6a', label: '护盾',     w: 0.25 },
-  { id: 'life',    color: '#ef5350', label: '生命+1',   w: 0.15 },
-  { id: 'bomb',    color: '#ffd54f', label: '炸弹+1',   w: 0.20 },
-  { id: 'rapid',   color: '#ab47bc', label: '速射',     w: 0.10 },
+  { id: 'power',   color: '#ff7043', label: '火力升级', w: 0.28 },
+  { id: 'missile', color: '#ffd54f', label: '追踪导弹', w: 0.16 },
+  { id: 'laser',   color: '#00e5ff', label: '激光',     w: 0.14 },
+  { id: 'triple',  color: '#4fc3f7', label: '三向射击', w: 0.12 },
+  { id: 'shield',  color: '#66bb6a', label: '护盾',     w: 0.12 },
+  { id: 'life',    color: '#ef5350', label: '生命+1',   w: 0.08 },
+  { id: 'bomb',    color: '#e53935', label: '炸弹+1',   w: 0.10 },
 ];
 function spawnPowerup(x, y) {
-  powerups.push({ x, y, vy: 1.6, r: 12, type: POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)] });
+  powerups.push({ x, y, vy: 1.6, r: 12, type: POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)], fromTop: false });
+}
+// 空投：从屏幕顶部缓缓降落的道具（带降落伞）
+function airDrop() {
+  const type = POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)];
+  powerups.push({
+    x: rand(45, W - 45), y: -24, vy: rand(1.1, 1.7), r: 13,
+    type, fromTop: true, sway: rand(0, Math.PI * 2),
+  });
 }
 
 // ============ 主更新 ============
@@ -477,6 +575,8 @@ function update(dt) {
 
   // 道具计时
   if (player.tripleT > 0) { player.tripleT -= dt * 1000; if (player.tripleT <= 0) player.triple = 0; }
+  if (player.missileT > 0) { player.missileT -= dt * 1000; if (player.missileT <= 0) player.missile = 0; }
+  if (player.laserT > 0) { player.laserT -= dt * 1000; if (player.laserT <= 0) player.laser = 0; }
   if (player.invuln > 0) player.invuln -= dt * 1000;
 
   // ===== 子弹 =====
@@ -492,12 +592,55 @@ function update(dt) {
   }
   enemyBullets = enemyBullets.filter(b => b.y < H + 20);
 
+  // ===== 追踪导弹：自动锁定最近敌人 =====
+  for (const m of missiles) {
+    let target = null, best = Infinity;
+    for (const e of enemies) {
+      const d = dist(m.x, m.y, e.x, e.y);
+      if (d < best) { best = d; target = e; }
+    }
+    if (target) {
+      const dx = target.x - m.x, dy = target.y - m.y;
+      const d = Math.hypot(dx, dy) || 1;
+      m.vx += (dx / d) * 420 * dt;
+      m.vy += (dy / d) * 420 * dt;
+      const spd = 10;
+      const cur = Math.hypot(m.vx, m.vy) || 1;
+      m.vx = (m.vx / cur) * spd;
+      m.vy = (m.vy / cur) * spd;
+    }
+    m.x += m.vx * 60 * dt;
+    m.y += m.vy * 60 * dt;
+  }
+  missiles = missiles.filter(m => m.x > -30 && m.x < W + 30 && m.y > -30 && m.y < H + 30);
+
+  // ===== 空投计时 =====
+  airdropTimer -= dt * 1000;
+  if (airdropTimer <= 0) {
+    airdropTimer = rand(8000, 12000);
+    airDrop();
+  }
+
   // ===== 敌人行为 =====
   for (const e of enemies) {
-    e.y += e.speed * 60 * dt;
-    if (e.type === 'speedy') e.x += Math.sin(e.sway) * e.swaySpeed * 30 * dt;
-    else if (e.type !== 'boss') e.x += Math.sin(e.sway) * 0.8 * 60 * dt;
-    e.sway += dt * e.swaySpeed;
+    if (e.type === 'kamikaze') {
+      // 自爆者：高速冲向玩家
+      const dx = player.x - e.x, dy = player.y - e.y;
+      const d = Math.hypot(dx, dy) || 1;
+      e.x += (dx / d) * e.speed * 60 * dt;
+      e.y += (dy / d) * e.speed * 60 * dt;
+      e.sway += dt * e.swaySpeed;
+    } else if (e.hover) {
+      // 狙击手：悬停在固定高度左右徘徊
+      e.y = Math.min(e.y + e.speed * 60 * dt, e.hoverY);
+      e.x += Math.sin(e.sway) * 0.6 * 60 * dt;
+      e.sway += dt * e.swaySpeed;
+    } else {
+      e.y += e.speed * 60 * dt;
+      if (e.type === 'speedy') e.x += Math.sin(e.sway) * e.swaySpeed * 30 * dt;
+      else if (e.type !== 'boss') e.x += Math.sin(e.sway) * 0.8 * 60 * dt;
+      e.sway += dt * e.swaySpeed;
+    }
 
     if (e.isBoss) {
       e.phaseT += dt * 1000;
@@ -545,35 +688,53 @@ function update(dt) {
       const e = enemies[ei];
       if (circleHit(b, e)) {
         bullets.splice(bi, 1);
-        e.hp -= 1;
+        e.hp -= b.dmg || 1;
         spawnParticle(b.x, b.y, '#fff', 4, 0.3);
         if (e.hp <= 0) {
-          if (e.isBoss) {
-            // Boss 死亡
-            score += e.score;
-            bossActive = false;
-            spawnExplosion(e.x, e.y, '#d500f9');
-            spawnExplosion(e.x, e.y, '#ff4081');
-            spawnExplosion(e.x, e.y, '#ffd54f');
-            enemies.splice(ei, 1);
-            wave++;
-            sfx.boom();
-            shake = 20;
-            // 奖励道具
-            spawnPowerup(e.x - 40, e.y);
-            spawnPowerup(e.x + 40, e.y);
-          } else {
-            score += e.score;
-            spawnExplosion(e.x, e.y, e.color);
-            if (Math.random() < e.drop) spawnPowerup(e.x, e.y);
-            enemies.splice(ei, 1);
-            sfx.hit();
-          }
+          if (e.isBoss) bossKilled(ei);
+          else killEnemy(ei);
         }
         break;
       }
     }
   }
+
+  // ===== 追踪导弹 vs 敌人 =====
+  for (let mi = missiles.length - 1; mi >= 0; mi--) {
+    const m = missiles[mi];
+    let hit = false;
+    for (let ei = enemies.length - 1; ei >= 0; ei--) {
+      const e = enemies[ei];
+      if (circleHit(m, e)) {
+        e.hp -= m.dmg;
+        spawnParticle(m.x, m.y, '#ffd54f', 8, 0.4);
+        if (e.hp <= 0) {
+          if (e.isBoss) bossKilled(ei);
+          else killEnemy(ei);
+        }
+        hit = true;
+        break;
+      }
+    }
+    if (hit) missiles.splice(mi, 1);
+  }
+
+  // ===== 激光 vs 敌人（贯穿整列） =====
+  for (let li = lasers.length - 1; li >= 0; li--) {
+    const lz = lasers[li];
+    for (let ei = enemies.length - 1; ei >= 0; ei--) {
+      const e = enemies[ei];
+      if (Math.abs(e.x - lz.x) < lz.r + e.r && e.y < lz.y && e.y > lz.y - lz.length) {
+        e.hp -= lz.dmg;
+        spawnParticle(e.x, e.y, '#00e5ff', 6, 0.3);
+        if (e.hp <= 0) {
+          if (e.isBoss) bossKilled(ei);
+          else killEnemy(ei);
+        }
+      }
+    }
+  }
+  lasers.length = 0;
 
   // ===== 敌人 vs 玩家 / 敌弹 vs 玩家 =====
   if (player.invuln <= 0) {
@@ -599,6 +760,11 @@ function update(dt) {
   // ===== 道具拾取 =====
   for (let i = powerups.length - 1; i >= 0; i--) {
     const p = powerups[i];
+    // 空投道具左右摆动下降
+    if (p.fromTop) {
+      p.sway += dt * 2.5;
+      p.x += Math.sin(p.sway) * 30 * dt;
+    }
     p.y += p.vy * 60 * dt;
     if (p.y > H + 20) { powerups.splice(i, 1); continue; }
     if (dist(player.x, player.y, p.x, p.y) < player.r + p.r + 6) {
@@ -618,6 +784,7 @@ function update(dt) {
   particles = particles.filter(p => p.life > 0);
 
   if (shake > 0) shake -= 60 * dt;
+  if (chapterBanner > 0) chapterBanner -= dt;
 
   // 波次更新（非 Boss 时）
   updateWave(dt);
@@ -625,11 +792,13 @@ function update(dt) {
 
 function applyPowerup(type) {
   switch (type.id) {
+    case 'power':   player.power = Math.min(5, player.power + 1); break;
+    case 'missile': player.missile = 1; player.missileT = 9000; break;
+    case 'laser':   player.laser = 1; player.laserT = 9000; break;
     case 'triple': player.triple = 1; player.tripleT = 8000; break;
     case 'shield': player.shield = 1; break;
     case 'life': player.lives = Math.min(6, player.lives + 1); break;
     case 'bomb': player.bomb = Math.min(3, player.bomb + 1); break;
-    case 'rapid': player.fireRate = Math.max(90, player.fireRate - 40); break;
   }
 }
 
@@ -704,7 +873,7 @@ function drawEnemy(e) {
   ctx.translate(e.x, e.y);
 
   if (e.isBoss) {
-    // Boss 绘制：六边形 + 核心
+    // Boss 绘制：六边形 + 核心（颜色随章节变化）
     const pulse = Math.sin(e.phaseT / 300) * 3;
     ctx.beginPath();
     for (let i = 0; i < 6; i++) {
@@ -714,22 +883,22 @@ function drawEnemy(e) {
       if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
     }
     ctx.closePath();
-    ctx.fillStyle = 'rgba(213, 0, 249, 0.25)';
+    ctx.fillStyle = e.color + '40';
     ctx.fill();
-    ctx.strokeStyle = '#d500f9';
+    ctx.strokeStyle = e.color;
     ctx.lineWidth = 3;
     ctx.stroke();
 
     ctx.beginPath();
     ctx.arc(0, 0, e.r * 0.45, 0, Math.PI * 2);
-    ctx.fillStyle = '#ff4081';
+    ctx.fillStyle = e.color;
     ctx.fill();
 
     // Boss 血条
     ctx.restore();
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.fillRect(W / 2 - 150, 14, 300, 12);
-    ctx.fillStyle = '#ff4081';
+    ctx.fillStyle = e.color;
     ctx.fillRect(W / 2 - 150, 14, 300 * (e.hp / e.maxHp), 12);
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 1;
@@ -752,6 +921,33 @@ function drawEnemy(e) {
       const px = Math.cos(ang) * e.r, py = Math.sin(ang) * e.r;
       if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
     }
+  } else if (e.type === 'splitter') {
+    // 分裂者：十字形
+    ctx.moveTo(-e.r, 0);
+    ctx.lineTo(0, 0);
+    ctx.lineTo(0, -e.r);
+    ctx.lineTo(0, 0);
+    ctx.lineTo(e.r, 0);
+    ctx.lineTo(0, 0);
+    ctx.lineTo(0, e.r);
+  } else if (e.type === 'kamikaze') {
+    // 自爆者：箭头
+    ctx.moveTo(0, -e.r);
+    ctx.lineTo(e.r * 0.8, e.r * 0.6);
+    ctx.lineTo(0, e.r * 0.2);
+    ctx.lineTo(-e.r * 0.8, e.r * 0.6);
+  } else if (e.type === 'sniper') {
+    // 狙击手：十字瞄准
+    ctx.arc(0, 0, e.r * 0.5, 0, Math.PI * 2);
+    ctx.moveTo(-e.r, 0);
+    ctx.lineTo(e.r, 0);
+    ctx.moveTo(0, -e.r);
+    ctx.lineTo(0, e.r);
+  } else if (e.type === 'mini') {
+    // 分裂小敌：小三角
+    ctx.moveTo(0, 10);
+    ctx.lineTo(-8, -6);
+    ctx.lineTo(8, -6);
   } else {
     // 菱形
     ctx.moveTo(0, 14);
@@ -781,6 +977,26 @@ function drawEnemy(e) {
 function drawPowerup(p) {
   ctx.save();
   ctx.translate(p.x, p.y);
+
+  // 空投降落伞
+  if (p.fromTop) {
+    ctx.beginPath();
+    ctx.moveTo(-10, -18);
+    ctx.quadraticCurveTo(0, -34, 10, -18);
+    ctx.quadraticCurveTo(0, -26, -10, -18);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.fill();
+    ctx.strokeStyle = '#aaa';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, -18);
+    ctx.lineTo(0, -12);
+    ctx.strokeStyle = '#999';
+    ctx.stroke();
+  }
+
   ctx.rotate(performance.now() / 400);
   ctx.beginPath();
   for (let i = 0; i < 5; i++) {
@@ -799,6 +1015,45 @@ function drawPowerup(p) {
   ctx.restore();
 }
 
+function drawMissile(m) {
+  ctx.save();
+  ctx.translate(m.x, m.y);
+  const ang = Math.atan2(m.vy, m.vx);
+  ctx.rotate(ang);
+  // 弹体
+  ctx.beginPath();
+  ctx.moveTo(10, 0);
+  ctx.lineTo(-6, -4);
+  ctx.lineTo(-4, 0);
+  ctx.lineTo(-6, 4);
+  ctx.closePath();
+  ctx.fillStyle = '#ffd54f';
+  ctx.fill();
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  // 尾焰
+  ctx.beginPath();
+  ctx.moveTo(-4, -2);
+  ctx.lineTo(-4 - rand(4, 7), 0);
+  ctx.lineTo(-4, 2);
+  ctx.fillStyle = '#ff7043';
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawLaser(lz) {
+  ctx.save();
+  const grad = ctx.createLinearGradient(0, lz.y - lz.length, 0, lz.y);
+  grad.addColorStop(0, 'rgba(0, 229, 255, 0)');
+  grad.addColorStop(1, 'rgba(0, 229, 255, 0.85)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(lz.x - lz.r, lz.y - lz.length, lz.r * 2, lz.length);
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.fillRect(lz.x - 1, lz.y - lz.length, 2, lz.length);
+  ctx.restore();
+}
+
 function drawHUD() {
   // 分数
   ctx.fillStyle = '#fff';
@@ -806,11 +1061,24 @@ function drawHUD() {
   ctx.textAlign = 'left';
   ctx.fillText('分数 ' + score, 16, 34);
 
-  // 波次
+  // 波次 / 章节
   ctx.textAlign = 'center';
   ctx.font = 'bold 18px "Segoe UI", sans-serif';
   ctx.fillStyle = '#9aa7c8';
-  ctx.fillText('第 ' + wave + ' 波' + (bossActive ? '  ⚠ BOSS' : ''), W / 2, 34);
+  ctx.fillText('第 ' + chapter + ' 关 · ' + (bossActive ? '⚠ BOSS' : '第 ' + wave + ' 波'), W / 2, 34);
+
+  // 章节横幅（进入新关卡时显示）
+  if (chapterBanner > 0) {
+    const a = Math.min(1, chapterBanner);
+    ctx.globalAlpha = a;
+    ctx.font = 'bold 40px "Segoe UI", sans-serif';
+    ctx.fillStyle = '#ffd54f';
+    ctx.fillText('第 ' + chapter + ' 关', W / 2, H / 2 - 22);
+    ctx.font = '22px "Segoe UI", sans-serif';
+    ctx.fillStyle = '#a5d8ff';
+    ctx.fillText(chapterTitle, W / 2, H / 2 + 20);
+    ctx.globalAlpha = 1;
+  }
 
   // 生命
   ctx.textAlign = 'right';
@@ -826,6 +1094,21 @@ function drawHUD() {
 
   // 道具状态
   let line = 1;
+  if (player.power > 1) {
+    ctx.fillStyle = '#ff7043';
+    ctx.fillText('🔥 火力 Lv.' + player.power, W - 16, 58 + line * 20);
+    line++;
+  }
+  if (player.missile > 0) {
+    ctx.fillStyle = '#ffd54f';
+    ctx.fillText('🚀 追踪导弹 ' + Math.ceil(player.missileT / 1000) + 's', W - 16, 58 + line * 20);
+    line++;
+  }
+  if (player.laser > 0) {
+    ctx.fillStyle = '#00e5ff';
+    ctx.fillText('⚡ 激光 ' + Math.ceil(player.laserT / 1000) + 's', W - 16, 58 + line * 20);
+    line++;
+  }
   if (player.triple > 0) {
     ctx.fillStyle = '#4fc3f7';
     ctx.fillText('✦ 三向射击 ' + Math.ceil(player.tripleT / 1000) + 's', W - 16, 58 + line * 20);
@@ -846,8 +1129,8 @@ function draw() {
     ctx.translate(rand(-shake, shake) * 0.4, rand(-shake, shake) * 0.4);
   }
 
-  // 星空
-  ctx.fillStyle = '#0d1226';
+  // 星空（底色随章节变化）
+  ctx.fillStyle = CHAPTER_COLORS[(chapter - 1) % CHAPTER_COLORS.length];
   ctx.fillRect(-10, -10, W + 20, H + 20);
   for (const s of stars) {
     ctx.globalAlpha = Math.min(1, s.s);
@@ -855,6 +1138,9 @@ function draw() {
     ctx.fillRect(s.x, s.y, s.s, s.s);
   }
   ctx.globalAlpha = 1;
+
+  // 激光光束（最底层）
+  for (const lz of lasers) drawLaser(lz);
 
   // 道具
   for (const p of powerups) drawPowerup(p);
@@ -865,7 +1151,7 @@ function draw() {
     ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
     ctx.fillStyle = b.color;
     ctx.shadowColor = b.color;
-    ctx.shadowBlur = 10;
+    ctx.shadowBlur = b.r * 3;
     ctx.fill();
   }
   for (const b of enemyBullets) {
@@ -877,6 +1163,9 @@ function draw() {
     ctx.fill();
   }
   ctx.shadowBlur = 0;
+
+  // 追踪导弹
+  for (const m of missiles) drawMissile(m);
 
   // 敌人
   for (const e of enemies) drawEnemy(e);
